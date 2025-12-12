@@ -27,31 +27,6 @@ Generic, storage‑agnostic arbitrary‑precision integers for Swift.
 - Backward‑compatible 128‑bit integers:
   - `UInt128Backport` / `Int128Backport` mirror the behavior of native `UInt128` / `Int128` using custom 16‑byte storage and are available on older OS versions.
 
-## Installation
-
-Add `AnyInteger` to your SwiftPM package:
-
-```swift
-// In Package.swift
-dependencies: [
-    .package(url: "https://github.com/your-org/AnyInteger.git", branch: "main")
-],
-targets: [
-    .target(
-        name: "YourTarget",
-        dependencies: [
-            .product(name: "AnyInteger", package: "AnyInteger")
-        ]
-    )
-]
-```
-
-Then import the module where you want to use it:
-
-```swift
-import AnyInteger
-```
-
 ## Usage
 
 ### Fixed‑width big integers
@@ -95,6 +70,31 @@ let z = x &+ y
 ```
 
 When running on OS versions that provide `Int128` / `UInt128`, you can migrate to the standard types when appropriate.
+
+## Installation
+
+Add `AnyInteger` to your SwiftPM package:
+
+```swift
+// In Package.swift
+dependencies: [
+    .package(url: "https://github.com/your-org/AnyInteger.git", from: "0.0.1")
+],
+targets: [
+    .target(
+        name: "YourTarget",
+        dependencies: [
+            .product(name: "AnyInteger", package: "AnyInteger")
+        ]
+    )
+]
+```
+
+Then import the module where you want to use it:
+
+```swift
+import AnyInteger
+```
 
 ## API Stability
 
