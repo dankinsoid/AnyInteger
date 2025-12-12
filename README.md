@@ -78,7 +78,7 @@ Add `AnyInteger` to your SwiftPM package:
 ```swift
 // In Package.swift
 dependencies: [
-    .package(url: "https://github.com/your-org/AnyInteger.git", from: "0.0.1")
+    .package(url: "https://github.com/dankinsoid/AnyInteger.git", from: "0.0.1")
 ],
 targets: [
     .target(
