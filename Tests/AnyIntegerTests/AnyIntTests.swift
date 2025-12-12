@@ -6,8 +6,8 @@ import Foundation
 
 enum AnyIntTests {
 
-    typealias IntToTest = UInt128_bc
-    typealias SignedIntToTest = Int128_bc
+    typealias IntToTest = UInt128Backport
+    typealias SignedIntToTest = Int128Backport
 
     @Suite("System Tests")
     struct SystemTests {

@@ -30,9 +30,9 @@ extension UInt128: SignednessRepresentable { public typealias OppositeSigned = I
 extension Int128: SignednessRepresentable { public typealias OppositeSigned = UInt128 }
 
 /// Unsigned 128-bit integer backed by a fixed 16-byte storage. It's a backward-compatible version of native `UInt128`.
-public typealias UInt128_bc = AnyInt<Byte16, UInt64>
+public typealias UInt128Backport = AnyInt<Byte16, UInt64>
 /// Signed 128-bit integer backed by a fixed 16-byte storage. It's a backward-compatible version of native `Int128`.
-public typealias Int128_bc = AnyInt<Byte16, Int64>
+public typealias Int128Backport = AnyInt<Byte16, Int64>
 
 /// Unsigned 256-bit integer backed by a fixed 32-byte storage.
 public typealias UInt256 = AnyInt<Byte32, UInt64>
