@@ -130,8 +130,12 @@ public struct AnyInt<
 
     public var words: Words { Words(bytes: storage) }
     public var bitWidth: Int { storage.count * 8 }
+    public var exactBitWidth: Int { 
+        bitWidth - (storage.last?.leadingZeroBitCount ?? 0)
+    }
 
     public var leadingZeroBitCount: Int {
+        guard !storage.isEmpty else { return bitWidth }
         var count = 0
         for byte in storage.reversed() {
             if byte == 0 {
@@ -145,6 +149,7 @@ public struct AnyInt<
     }
 
     public var trailingZeroBitCount: Int {
+        guard !storage.isEmpty else { return bitWidth }
         var count = 0
         for byte in storage {
             if byte == 0 {
@@ -217,17 +222,42 @@ public struct AnyInt<
         var value = isNegative ? -rounded : rounded
         var bytes: [UInt8] = []
 
+        // Determine max bytes considering both FixedBytesStorage and LimitedBytesStorage
         let maxBytes: Int
         if let fixedType = Storage.self as? any FixedBytesStorage.Type {
             maxBytes = fixedType.byteCount
+        } else if let limitedType = Storage.self as? any LimitedBytesStorage.Type {
+            maxBytes = limitedType.byteCount
         } else {
             maxBytes = Int.max
         }
 
+        var previousValue = value
         while value > 0 && bytes.count < maxBytes {
             let byte = UInt8(value.truncatingRemainder(dividingBy: 256))
             bytes.append(byte)
+            previousValue = value
             value = (value / 256).rounded(.towardZero)
+            
+            // Check for precision loss: if value didn't decrease by approximately byte/256, we lost precision
+            // This is a heuristic check for floating point precision issues
+            if value >= previousValue && bytes.count > 1 {
+                // Likely precision loss, verify by checking if we can reconstruct
+                var reconstructed: T = 0
+                var multiplier: T = 1
+                for byte in bytes.reversed() {
+                    reconstructed += T(byte) * multiplier
+                    multiplier *= 256
+                    // If multiplier becomes too large, we've exceeded precision
+                    if multiplier.isInfinite || multiplier.isNaN {
+                        return nil
+                    }
+                }
+                // If reconstructed value doesn't match original, we lost precision
+                if abs(reconstructed - previousValue) > previousValue * T.ulpOfOne * 10 {
+                    return nil
+                }
+            }
         }
 
         if value > 0 {
@@ -272,7 +302,7 @@ public struct AnyInt<
     public static func - (lhs: Self, rhs: Self) -> Self {
         let (result, overflow) = lhs.subtractingReportingOverflow(rhs)
         if overflow {
-            fatalError("Overflow occurred during addition.")
+            fatalError("Overflow occurred during subtraction.")
         }
         return result
     }
@@ -286,7 +316,7 @@ public struct AnyInt<
     public static func * (lhs: Self, rhs: Self) -> Self {
         let (result, overflow) = lhs.multipliedReportingOverflow(by: rhs)
         if overflow {
-            fatalError("Overflow occurred during addition.")
+            fatalError("Overflow occurred during multiplication.")
         }
         return result
     }
@@ -300,7 +330,7 @@ public struct AnyInt<
     public static func / (lhs: Self, rhs: Self) -> Self {
         let (result, overflow) = lhs.dividedReportingOverflow(by: rhs)
         if overflow {
-            fatalError("Overflow occurred during addition.")
+            fatalError("Overflow occurred during division.")
         }
         return result
     }
@@ -314,7 +344,7 @@ public struct AnyInt<
     public static func % (lhs: Self, rhs: Self) -> Self {
         let (result, overflow) = lhs.remainderReportingOverflow(dividingBy: rhs)
         if overflow {
-            fatalError("Overflow occurred during addition.")
+            fatalError("Overflow occurred during remainder operation.")
         }
         return result
     }
@@ -371,28 +401,29 @@ public struct AnyInt<
 
     @inlinable
     public static func >>= <RHS>(lhs: inout Self, rhs: RHS) where RHS: BinaryInteger {
-        let shiftAmount = Int(rhs)
-        guard shiftAmount > 0 else { return }
+        guard let shiftAmount = Int(exactly: rhs) else {
+            return
+        }
+    
+        guard shiftAmount > 0 else { 
+            lhs <<= -shiftAmount
+            return
+        }
 
         let originalStorage = lhs.storage
         let count = originalStorage.count
         guard count > 0 else { return }
 
-        let byteShift = shiftAmount / 8
-        let bitShift = shiftAmount % 8
         let signByte = Self.extensionByte(for: originalStorage)
-
-        if byteShift >= count {
-            var newStorage = originalStorage
-            for i in 0 ..< count {
-                newStorage[i] = signByte
-            }
-            lhs.storage = newStorage
-            Self.trimStorage(&lhs.storage)
+        let byteShift = shiftAmount >> 3
+        guard byteShift.magnitude < count else {
+            lhs = .zero
             return
         }
 
+        let bitShift = shiftAmount & 7
         var result = originalStorage
+
         for i in 0 ..< count {
             let srcIndex = i + byteShift
             let nextIndex = srcIndex + 1
@@ -412,14 +443,18 @@ public struct AnyInt<
 
     @inlinable
     public static func <<= <RHS>(lhs: inout Self, rhs: RHS) where RHS: BinaryInteger {
-        guard rhs > 0 else { return }
         guard let shiftAmount = Int(exactly: rhs) else {
             lhs = 0 // rhs is too large to represent; shifting to zero
             return
         }
 
-        let byteShift = shiftAmount / 8
-        let bitShift = shiftAmount % 8
+        guard shiftAmount > 0 else {
+            lhs >>= -shiftAmount
+            return
+        }
+
+        let byteShift = shiftAmount >> 3
+        let bitShift = shiftAmount & 7
 
         if let limit = Self.storageLimit, byteShift >= limit {
             lhs = .zero
@@ -427,8 +462,8 @@ public struct AnyInt<
         }
 
         // Calculate the number of bytes needed after the shift
-        let bitsNeeded = (lhs.storage.count * 8 - lhs.leadingZeroBitCount) + shiftAmount
-        let bytesNeeded = (bitsNeeded + 7) / 8
+        let bitsNeeded = ((lhs.storage.count << 3) - lhs.leadingZeroBitCount) + shiftAmount
+        let bytesNeeded = (bitsNeeded + 7) >> 3
         let targetCount = Swift.max(lhs.storage.count, bytesNeeded)
 
         // Extend storage if needed
@@ -582,12 +617,13 @@ extension AnyInt {
         guard !(Storage.self is any FixedBytesStorage.Type) else { return }
         guard storage.count > 0 else { return }
 
-        var result = storage
         let signByte = extensionByte(for: storage)
-
-        while result.count > 1 {
-            let last = result[result.count - 1]
-            let prev = result[result.count - 2]
+        
+        // Find the index from the end where trimming should stop
+        var trimCount = 0
+        for i in stride(from: storage.count - 1, through: 1, by: -1) {
+            let last = storage[i]
+            let prev = storage[i - 1]
             let prevSignBit = (prev & 0x80) != 0
             let lastSignBit = (signByte & 0x80) != 0
 
@@ -595,10 +631,14 @@ extension AnyInt {
             if last != signByte || prevSignBit != lastSignBit {
                 break
             }
-            result.removeLast()
+            trimCount += 1
         }
-
-        storage = result
+        
+        // Remove all trailing sign extension bytes in one operation
+        if trimCount > 0 {
+            let newEndIndex = storage.count - trimCount
+            storage.removeSubrange(newEndIndex ..< storage.count)
+        }
     }
 }
 
@@ -643,22 +683,35 @@ extension AnyInt: SignedNumeric where Signedness: SignedInteger {
 extension AnyInt: SignedInteger where Signedness: SignedInteger {}
 
 extension AnyInt: LosslessStringConvertible {
+
     public var description: String {
         if self == 0 {
             return "0"
         }
 
-        var result = ""
+        var digits: [Character] = []
         var value = magnitude
         let isNegative = Self.isSigned && self < 0
 
         while value > 0 {
-            let digit = value % 10
-            result = String(Int(digit.storage.first ?? 0)) + result
-            value = value / 10
+            let (quotient, remainder, _) = value.dividedWithRemainderReportingOverflow(by: 10)
+            // Extract the digit correctly - remainder is guaranteed to be < 10
+            // Convert remainder to Int by extracting its value properly
+            var digitValue: Int = 0
+            if !remainder.storage.isEmpty {
+                // For small remainders (< 256), first byte is sufficient
+                // For larger, we need to handle properly, but remainder % 10 is always < 10
+                digitValue = Int(remainder.storage[0])
+            }
+            digits.append(Character("\(digitValue)"))
+            value = quotient
         }
 
-        return isNegative ? "-" + result : result
+        if isNegative {
+            digits.append("-")
+        }
+        
+        return String(digits.reversed())
     }
 
     public init?(_ description: String) {
@@ -906,7 +959,8 @@ public extension AnyInt {
         return (Self(storage: resultStorage), overflow)
     }
 
-    func dividedWithReminderReportingOverflow(by rhs: Self) -> (partialValue: Self, reminder: Self, overflow: Bool) {
+    // TODO: https://habr.com/ru/companies/ruvds/articles/836054/
+    func dividedWithRemainderReportingOverflow(by rhs: Self) -> (partialValue: Self, remainder: Self, overflow: Bool) {
         // Division by zero: signal overflow, return zeros.
         if rhs == Self.zero {
             return (self, Self.zero, true)
@@ -1085,12 +1139,12 @@ public extension AnyInt {
     }
 
     func dividedReportingOverflow(by rhs: Self) -> (partialValue: Self, overflow: Bool) {
-        let (quotient, _, overflow) = self.dividedWithReminderReportingOverflow(by: rhs)
+        let (quotient, _, overflow) = self.dividedWithRemainderReportingOverflow(by: rhs)
         return (quotient, overflow)
     }
 
     func remainderReportingOverflow(dividingBy rhs: Self) -> (partialValue: Self, overflow: Bool) {
-        let (_, remainder, overflow) = self.dividedWithReminderReportingOverflow(by: rhs)
+        let (_, remainder, overflow) = self.dividedWithRemainderReportingOverflow(by: rhs)
         return (remainder, overflow)
     }
 }
@@ -1163,7 +1217,7 @@ public extension AnyInt where Storage: LimitedBytesStorage {
     func dividingFullWidth(_ dividend: (high: Self, low: Magnitude)) -> (quotient: Self, remainder: Self) {
         let divisor = self
         if divisor == 0 {
-            return (self, Self.zero) // Undefined; mirror Swift by trapping.
+            fatalError("Division by zero in dividingFullWidth")
         }
 
         let baseCount = Storage.byteCount
